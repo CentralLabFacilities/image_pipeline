@@ -46,6 +46,8 @@ boost::format g_format;
 bool save_all_image, save_image_service;
 std::string encoding;
 bool request_start_end;
+bool display_conversion;
+int max_images;
 
 
 bool service(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
@@ -112,6 +114,7 @@ public:
       return;
 
     count_++;
+    if(max_images > 0 && count_ == max_images) std::exit(1);
   }
 
   void callbackWithCameraInfo(const sensor_msgs::ImageConstPtr& image_msg, const sensor_msgs::CameraInfoConstPtr& info)
@@ -139,18 +142,48 @@ public:
     }
 
     count_++;
+    if(max_images > 0 && count_ == max_images) std::exit(1);
   }
 private:
   bool saveImage(const sensor_msgs::ImageConstPtr& image_msg, std::string &filename) {
+
     cv::Mat image;
+    cv_bridge::CvImageConstPtr cv_ptr;
     try
     {
-      image = cv_bridge::toCvShare(image_msg, encoding)->image;
+      if(encoding.empty()) cv_ptr = cv_bridge::toCvShare(image_msg);
+      else cv_ptr = cv_bridge::toCvShare(image_msg, encoding);
     } catch(cv_bridge::Exception)
     {
       ROS_ERROR("Unable to convert %s image to %s", image_msg->encoding.c_str(), encoding.c_str());
       return false;
     }
+
+    if(display_conversion) {
+      // We want to scale floating point images so that they display nicely
+      bool do_dynamic_scaling;
+      if (image_msg->encoding.find("F") != std::string::npos) {
+        do_dynamic_scaling = true;
+      } else {
+        do_dynamic_scaling = false;
+      }
+
+      cv_bridge::CvtColorForDisplayOptions options;
+      options.do_dynamic_scaling = do_dynamic_scaling;
+      options.colormap = -1; //NO_COLORMAP
+      options.min_image_value = 0;
+      if (image_msg->encoding == "32FC1") {
+        options.max_image_value = 10;  // 10 [m]
+      } else if (image_msg->encoding == "16UC1") {
+        options.max_image_value = 10 * 1000;  // 10 * 1000 [mm]
+      }
+        
+      image = cvtColorForDisplay(cv_ptr, "", options)->image;
+      
+    } else {
+      image = cv_ptr->image;
+    }
+
 
     if (!image.empty()) {
       try {
@@ -205,9 +238,12 @@ int main(int argc, char** argv)
   ros::NodeHandle local_nh("~");
   std::string format_string;
   local_nh.param("filename_format", format_string, std::string("left%04i.%s"));
-  local_nh.param("encoding", encoding, std::string("bgr8"));
+  local_nh.param("encoding", encoding, std::string(""));
   local_nh.param("save_all_image", save_all_image, true);
   local_nh.param("request_start_end", request_start_end, false);
+  local_nh.param("display_conversion", display_conversion, false);
+  local_nh.param("count", max_images, -1);
+
   g_format.parse(format_string);
   ros::ServiceServer save = local_nh.advertiseService ("save", service);
 
